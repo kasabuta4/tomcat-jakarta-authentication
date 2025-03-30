@@ -1,15 +1,13 @@
 package com.github.kasabuta4.tomcat.jakarta.authentication.auth.module;
 
 import java.io.IOException;
-import java.security.Principal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -27,21 +25,20 @@ import jakarta.security.auth.message.AuthException;
 import jakarta.security.auth.message.AuthStatus;
 import jakarta.security.auth.message.MessageInfo;
 import jakarta.security.auth.message.callback.CallerPrincipalCallback;
+import jakarta.security.auth.message.callback.GroupPrincipalCallback;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-
-import org.apache.catalina.realm.GenericPrincipal;
 
 public class RequestValidator {
 
   private static final String APP_USER_ID_PARAMETER_NAME = "appUserId";
 
-  private static final String STORED_PRINCIPAL_ATTRIBUTE_NAME
-      = "com.github.kasabuta4.tomcat.jakarta.authentication.auth.module.principal";
+  private static final String APP_USER_ATTRIBUTE_NAME
+      = "com.github.kasabuta4.tomcat.jakarta.authentication.auth.module.appUser";
   private static final String CANDIDATES_ATTRIBUTE_NAME
       = "com.github.kasabuta4.tomcat.jakarta.authentication.auth.module.candidates";
-  private static final List<String> UNAUTHENTICATED_USER_ROLES
-      = Collections.unmodifiableList(Arrays.asList(AppUser.USER_ROLE_NAME));
+  private static final String[] UNAUTHENTICATED_USER_ROLES
+      = new String[] {AppUser.USER_ROLE_NAME};
 
   private static final String JDBC_RESOURCE_CONTEXT_URI = "java:comp/env/jdbc";
   private static final String SELECT_CANDIDATES_SQL_STATEMENT
@@ -58,8 +55,6 @@ public class RequestValidator {
   private final String externalUserIdAttributeName;
   private final String loginPath;
 
-  private Optional<AppUser> appUser;
-
   public RequestValidator(
       CallbackHandler handler, MessageInfo messageInfo, Subject clientSubject,
       String dataSourceName, String externalUserIdAttributeName, String loginPath
@@ -75,44 +70,47 @@ public class RequestValidator {
 
   public AuthStatus validate() throws AuthException {
     if (isAlreadyAuthenticated()) {
-      return invokeService(getStoredAuthenticatedPrincipal());
+      return invokeService(createAppUserCallbacks());
     }
     if (!isAuthenticatedExternally() || getCandidates().isEmpty()) {
       return sendFailure();
     }
     if (!isLoginRequest()) {
-      return invokeService(createUnauthenticatedPrincipal());
+      return invokeService(createAnonymousCallbacks());
     }
-    if (!isAppUserSpecified() || !isAppUserIdentified()) {
+    if (!isAppUserSpecified() || !isAppUserIdentifiable()) {
       return sendFailure();
     }
-    saveAuthenticatedPrincipal(createAuthenticatedPrincipal());
-    return invokeService(getStoredAuthenticatedPrincipal());
+    return invokeService(createAppUserCallbacks());
   }
 
   private boolean isAlreadyAuthenticated() {
-    return getStoredAuthenticatedPrincipal() != null;
+    return getAppUserFromSession() != null;
   }
 
-  private Principal getStoredAuthenticatedPrincipal() {
-    return (Principal)request.getSession().getAttribute​(STORED_PRINCIPAL_ATTRIBUTE_NAME);
+  private AppUser getAppUserFromSession() {
+    return (AppUser)request.getSession().getAttribute(APP_USER_ATTRIBUTE_NAME);
   }
 
-  private AuthStatus invokeService(Principal principal) {
+  private AuthStatus invokeService(Callback[] callbacks) {
     try {
-      handler.handle​(toCallbackArray(createCallerPrincipalCallback(principal)));
+      handler.handle​(callbacks);
     } catch (IOException | UnsupportedCallbackException ex) {
       //  ignore
     }
     return AuthStatus.SUCCESS;
   }
 
-  private Callback[] toCallbackArray(Callback callback) {
-    return new Callback[] { callback };
+  private Callback[] createAppUserCallbacks() {
+    AppUser appUser = getAppUserFromSession();
+    return createCallbacks(appUser.getAppUserId(), appUser.getRoles());
   }
 
-  private Callback createCallerPrincipalCallback(Principal principal) {
-    return new CallerPrincipalCallback(clientSubject, principal);
+  private Callback[] createCallbacks(String name, String[] groups) {
+    return new Callback[] {
+        new CallerPrincipalCallback(clientSubject, name),
+        new GroupPrincipalCallback(clientSubject, groups)
+    };
   }
 
   private boolean isAuthenticatedExternally() {
@@ -121,30 +119,30 @@ public class RequestValidator {
 
   private String getExternalUserId() {
     //return (String)request.getAttribute(externalUserIdAttributeName);
-    return (String)request.getParameter(externalUserIdAttributeName);
+    return request.getParameter(externalUserIdAttributeName);
   }
 
   private List<AppUser> getCandidates() throws AuthException {
     if (!isCandidatesStored()) {
-      saveCandidates(loadCandidates());
+      saveCandidatesToSession(getCandidatesFromDataSource());
     }
-    return restoreCandidates();
+    return getCandidatesFromSession();
   }
 
   private boolean isCandidatesStored() {
-    return restoreCandidates() != null;
+    return getCandidatesFromSession() != null;
   }
 
   @SuppressWarnings("unchecked")
-  private List<AppUser> restoreCandidates() {
+  private List<AppUser> getCandidatesFromSession() {
     return (List<AppUser>)request.getSession().getAttribute​(CANDIDATES_ATTRIBUTE_NAME);
   }
 
-  private void saveCandidates(List<AppUser> candidates) {
+  private void saveCandidatesToSession(List<AppUser> candidates) {
     request.getSession().setAttribute​(CANDIDATES_ATTRIBUTE_NAME, candidates);
   }
 
-  private List<AppUser> loadCandidates() throws AuthException {
+  private List<AppUser> getCandidatesFromDataSource() throws AuthException {
     List<AppUser> appUsers = new ArrayList<>();
     try {
       try (Connection connection = getConnection()) {
@@ -197,8 +195,8 @@ public class RequestValidator {
         : request.getServletPath() + request.getPathInfo();
   }
 
-  private Principal createUnauthenticatedPrincipal() {
-    return new GenericPrincipal(getExternalUserId(), UNAUTHENTICATED_USER_ROLES);
+  private Callback[] createAnonymousCallbacks() {
+    return createCallbacks(getExternalUserId(), UNAUTHENTICATED_USER_ROLES);
   }
 
   private boolean isAppUserSpecified() {
@@ -209,33 +207,23 @@ public class RequestValidator {
     return request.getParameter​(APP_USER_ID_PARAMETER_NAME);
   }
 
-  private boolean isAppUserIdentified() throws AuthException {
-    return getIdentifiedAppUser().isPresent();
-  }
-
-  private Optional<AppUser> getIdentifiedAppUser() throws AuthException {
-    if (appUser == null) {
-      appUser = identifyAppUser();
+  private boolean isAppUserIdentifiable() throws AuthException {
+    Optional<AppUser> identifiedAppUser = identifyAppUser();
+    if (identifiedAppUser.isPresent()) {
+      saveAppUserToSession(identifiedAppUser.get());
     }
-    return appUser;
+    return identifiedAppUser.isPresent();
   }
 
   private Optional<AppUser> identifyAppUser() throws AuthException {
-    String appUserId = getAppUserId();
+    String specifiedAppUserId = getAppUserId();
     return getCandidates()
         .stream()
-        .filter(candidate -> appUserId.equals(candidate.getAppUserId()))
+        .filter(candidate -> Objects.equals(candidate.getAppUserId(), specifiedAppUserId))
         .findFirst();
   }
 
-  private Principal createAuthenticatedPrincipal() throws AuthException {
-    return new GenericPrincipal(
-        getIdentifiedAppUser().get().getAppUserId(),
-        getIdentifiedAppUser().get().getRoles()
-    );
-  }
-
-  private void saveAuthenticatedPrincipal(Principal principal) {
-    request.getSession().setAttribute(STORED_PRINCIPAL_ATTRIBUTE_NAME, principal);
+  private void saveAppUserToSession(AppUser appUser) {
+    request.getSession().setAttribute(APP_USER_ATTRIBUTE_NAME, appUser);
   }
 }

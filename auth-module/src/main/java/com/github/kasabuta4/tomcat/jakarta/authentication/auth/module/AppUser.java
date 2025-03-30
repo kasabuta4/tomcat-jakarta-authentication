@@ -1,10 +1,6 @@
 package com.github.kasabuta4.tomcat.jakarta.authentication.auth.module;
 
-import static java.util.Arrays.asList;
-import static java.util.Collections.unmodifiableList;
-
 import java.io.Serializable;
-import java.util.List;
 import java.util.Map;
 
 public class AppUser implements Serializable {
@@ -14,11 +10,11 @@ public class AppUser implements Serializable {
   public static final String MANAGER_ROLE_NAME = "manager";
   public static final String ADMIN_ROLE_NAME = "admin";
   
-  private static final Map<String, List<String>> GROUP_CODE_TO_ROLES_MAP
+  private static final Map<String, String[]> GROUP_CODE_TO_ROLES_MAP
       = Map.of(
-          "1", unmodifiableList(asList(USER_ROLE_NAME, EMPLOYEE_ROLE_NAME)),
-          "2", unmodifiableList(asList(USER_ROLE_NAME, EMPLOYEE_ROLE_NAME, MANAGER_ROLE_NAME)),
-          "3", unmodifiableList(asList(USER_ROLE_NAME, ADMIN_ROLE_NAME))
+          "1", new String[] {USER_ROLE_NAME, EMPLOYEE_ROLE_NAME},
+          "2", new String[] {USER_ROLE_NAME, EMPLOYEE_ROLE_NAME, MANAGER_ROLE_NAME},
+          "3", new String[] {USER_ROLE_NAME, ADMIN_ROLE_NAME}
       );
 
   private String appUserId;
@@ -51,7 +47,7 @@ public class AppUser implements Serializable {
     this.groupCode = groupCode;
   }
 
-  public List<String> getRoles() {
+  public String[] getRoles() {
     return GROUP_CODE_TO_ROLES_MAP.get(groupCode);
   }
 }
